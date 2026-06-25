@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "author": "Anonymous maker",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -76.98, "left": 52.57, "attrs": {} },
+    {
+      "type": "wokwi-gas-sensor",
+      "id": "gas1",
+      "top": -112.5,
+      "left": -165.8,
+      "attrs": { "ppm": "400" }
+    },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 51.2, "left": -172, "attrs": {} },
+    {
+      "type": "board-ssd1306",
+      "id": "oled1",
+      "top": 89.54,
+      "left": 201.83,
+      "attrs": { "i2cAddress": "0x3c" }
+    },
+    { "type": "wokwi-ds18b20", "id": "temp1", "top": -154.73, "left": 80.88, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "gas1:AO", "esp:4", "green", [] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "oled1:VCC", "esp:3V3", "red", [] ],
+    [ "gas1:VCC", "esp:5V", "red", [ "h0" ] ],
+    [ "ldr1:VCC", "esp:3V3.1", "red", [ "h0" ] ],
+    [ "esp:3V3.2", "oled1:VCC", "green", [ "h0" ] ],
+    [ "esp:GND.4", "ldr1:GND", "black", [ "h0" ] ],
+    [ "esp:GND.1", "gas1:GND", "black", [ "h0" ] ],
+    [ "esp:GND.3", "oled1:GND", "black", [ "h0" ] ],
+    [ "oled1:SDA", "esp:8", "green", [ "v0" ] ],
+    [ "oled1:SCL", "esp:9", "green", [ "v0" ] ],
+    [ "ldr1:AO", "esp:6", "green", [ "h0" ] ],
+    [ "temp1:DQ", "esp:5", "green", [ "v0" ] ],
+    [ "temp1:GND", "esp:GND.2", "black", [ "v0" ] ],
+    [ "temp1:VCC", "esp:3V3.2", "red", [ "v0" ] ],
+    [ "gas1:AOUT", "esp:4", "green", [ "h0" ] ]
+  ],
+  "dependencies": {}
+}
