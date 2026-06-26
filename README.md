@@ -198,7 +198,7 @@ The project wiring is defined in **diagram.json**.
 
 **Figure 1**
 
-pic1.png
+![Complete hardware circuit](pic1.png)
 
 Complete circuit wiring inside Wokwi.
 
@@ -206,7 +206,7 @@ Complete circuit wiring inside Wokwi.
 
 **Figure 2**
 
-pic2.png
+![OLED monitoring interface](pic2.png)
 
 Live OLED display during monitoring.
 
@@ -214,12 +214,9 @@ Live OLED display during monitoring.
 
 **Figure 3**
 
-pic3.png
+![Serial monitor output](pic3.png)
 
 Serial Monitor showing sensor values and anomaly detection.
-
----
-
 # 7. Working Principle
 
 ## Boot Calibration
@@ -388,14 +385,14 @@ Possible future enhancements include
 * Mobile monitoring application
 
 ---
-
 # 14. Image References
 
-| Image    | Description               |
-| -------- | ------------------------- |
-| pic1.png | Complete hardware circuit |
-| pic2.png | OLED monitoring interface |
-| pic3.png | Serial monitor output     |
+| Image | Description |
+| :---: | --- |
+| ![Circuit](pic1.png) | Complete hardware circuit |
+| ![OLED](pic2.png) | OLED monitoring interface |
+| ![Serial](pic3.png) | Serial monitor output |
+|-------|-------------|
 
 ---
 
