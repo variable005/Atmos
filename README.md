@@ -198,7 +198,7 @@ The project wiring is defined in **diagram.json**.
 
 **Figure 1**
 
-`pic1.png`
+pic1.png
 
 Complete circuit wiring inside Wokwi.
 
@@ -206,7 +206,7 @@ Complete circuit wiring inside Wokwi.
 
 **Figure 2**
 
-`pic2.png`
+pic2.png
 
 Live OLED display during monitoring.
 
@@ -214,7 +214,7 @@ Live OLED display during monitoring.
 
 **Figure 3**
 
-`pic3.png`
+pic3.png
 
 Serial Monitor showing sensor values and anomaly detection.
 
