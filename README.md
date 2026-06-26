@@ -198,7 +198,7 @@ The project wiring is defined in **diagram.json**.
 
 **Figure 1**
 
-![Complete hardware circuit](pic1.png)
+![Complete hardware circuit](assets/pic1.png)
 
 Complete circuit wiring inside Wokwi.
 
@@ -206,7 +206,7 @@ Complete circuit wiring inside Wokwi.
 
 **Figure 2**
 
-![OLED monitoring interface](pic2.png)
+![OLED monitoring interface](assets/pic2.png)
 
 Live OLED display during monitoring.
 
@@ -214,7 +214,7 @@ Live OLED display during monitoring.
 
 **Figure 3**
 
-![Serial monitor output](pic3.png)
+![Serial monitor output](assets/pic3.png)
 
 Serial Monitor showing sensor values and anomaly detection.
 # 7. Working Principle
@@ -356,9 +356,10 @@ Atoms/
 ├── libraries.txt
 ├── README.md
 │
-├── pic1.png
-├── pic2.png
-└── pic3.png
+└── assets/
+    ├── pic1.png
+    ├── pic2.png
+    └── pic3.png
 ```
 
 ---
@@ -389,9 +390,9 @@ Possible future enhancements include
 
 | Image | Description |
 | :---: | --- |
-| ![Circuit](pic1.png) | Complete hardware circuit |
-| ![OLED](pic2.png) | OLED monitoring interface |
-| ![Serial](pic3.png) | Serial monitor output |
+| ![Circuit](assets/pic1.png) | Complete hardware circuit |
+| ![OLED](assets/pic2.png) | OLED monitoring interface |
+| ![Serial](assets/pic3.png) | Serial monitor output |
 |-------|-------------|
 
 ---
