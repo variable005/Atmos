@@ -1,10 +1,8 @@
 /*
   ============================================================
-   AirGuard Cluster — Self-Calibrating Environmental Monitor
+   Atmos — Self-Calibrating Environmental Monitor
+   (Optimized: Union Memory, NVS Flash Wear Protection, Per-Sensor Warm Boot)
   ============================================================
-  Board:    ESP32-S3 DevKitC-1
-  Sensors:  MQ-2 (gas/smoke), DS18B20 (temp), LDR (light)
-  Display:  SSD1306 128x64 OLED (I2C)
 */
 
 #include <Wire.h>
@@ -12,93 +10,129 @@
 #include <Adafruit_SSD1306.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Preferences.h>
 
-// ---------------- Pin map ----------------
+// ---------------- Pin map & Display ----------------
 #define GAS_AO_PIN   4
-#define ONE_WIRE_BUS 5  // Changed to Pin 5 for DS18B20
+#define ONE_WIRE_BUS 5
 #define LDR_AO_PIN   6
 #define OLED_SCL_PIN 9
 #define OLED_SDA_PIN 8
 
-// ---------------- Display setup ----------------
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
-// ---------------- DS18B20 Setup ----------------
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
+Preferences nvs;
 
-// ---------------- Timing ----------------
+// ---------------- Timing & Thresholds ----------------
 const unsigned long SAMPLE_INTERVAL_MS = 2000; 
 const unsigned long CALIBRATION_DURATION_MS = 16000; 
+const unsigned long NVS_SAVE_INTERVAL_MS = 3600000; 
 
-const float EMA_ALPHA = 0.01;
 const float Z_WARNING = 2.0;
 const float Z_DANGER  = 3.5;
 
 unsigned long lastSampleTime = 0;
+unsigned long lastNVSSaveTime = 0;
 unsigned long bootTime = 0;
 bool isCalibrating = true;
 
 // ---------------- Baseline structure ----------------
 struct Baseline {
   float mean;
-  float variance;
+  union {
+    float M2;       // Memory state 1: Used ONLY during calibration
+    float variance; // Memory state 2: Used ONLY during live monitoring
+  };
   int sampleCount;
-  float sumForCalib;
-  float sumSqForCalib;
+  float alpha;
+  float minStdDev;
+  bool needsCalib;  // Tracks if this specific sensor needs a cold boot
 };
 
-Baseline gasBaseline   = {0,1,0,0,0};
-Baseline tempBaseline  = {0,1,0,0,0};
-Baseline lightBaseline = {0,1,0,0,0};
+// INITIALIZATION: {mean, union(M2/var), sampleCount, alpha, minStdDev, needsCalib}
+Baseline gasBaseline   = {0.0, {0.0}, 0, 0.010, 5.0, true};
+Baseline tempBaseline  = {0.0, {0.0}, 0, 0.005, 0.5, true};
+Baseline lightBaseline = {0.0, {0.0}, 0, 0.001, 10.0, true};
 
 enum AlertLevel { SAFE, CAUTION, DANGER };
 AlertLevel currentAlert = SAFE;
 
 // ============================================================
-// Statistics
+// NVS Storage Struct 
+// ============================================================
+struct NVSState {
+  float mean;
+  float variance;
+  bool isValid;
+};
+
+// ============================================================
+// Statistics (Welford's & EMA)
 // ============================================================
 void calibAccumulate(Baseline &b, float value) {
-  b.sumForCalib += value;
-  b.sumSqForCalib += value * value;
   b.sampleCount++;
+  float delta = value - b.mean;
+  b.mean += delta / b.sampleCount;
+  b.M2 += delta * (value - b.mean);
 }
 
 void calibFinalize(Baseline &b) {
-  if (b.sampleCount < 2) {
-    b.mean = b.sumForCalib / max(1, b.sampleCount);
-    b.variance = 1.0;
-    return;
-  }
-  b.mean = b.sumForCalib / b.sampleCount;
-  float meanSq = b.sumSqForCalib / b.sampleCount;
-  b.variance = meanSq - (b.mean * b.mean);
-  if (b.variance < 1.0) b.variance = 1.0;
+  float finalVar = (b.sampleCount < 2) ? (b.minStdDev * b.minStdDev) : (b.M2 / (b.sampleCount - 1));
+  float minVar = b.minStdDev * b.minStdDev;
+  b.variance = (finalVar < minVar) ? minVar : finalVar; 
+  b.needsCalib = false; // Calibration complete for this sensor
 }
 
 void calibRollingUpdate(Baseline &b, float value) {
   float delta = value - b.mean;
-  b.mean += EMA_ALPHA * delta;
-  b.variance = (1 - EMA_ALPHA) * (b.variance + EMA_ALPHA * delta * delta);
-  if (b.variance < 1.0) b.variance = 1.0;
+  b.mean += b.alpha * delta;
+  b.variance = (1.0 - b.alpha) * (b.variance + b.alpha * delta * delta);
+  
+  float minVar = b.minStdDev * b.minStdDev;
+  if (b.variance < minVar) b.variance = minVar;
 }
 
 float zScore(Baseline &b, float value) {
-  float stddev = sqrt(b.variance);
-  if (stddev < 0.01) stddev = 0.01;
-  return (value - b.mean) / stddev;
+  return (value - b.mean) / sqrt(b.variance);
 }
 
 // ============================================================
-// Forward declarations
+// NVS Management 
 // ============================================================
-const char* alertLevelToString(AlertLevel level);
-void updateDisplayCalibrating();
-void updateDisplayLive(float gasValue, float gasZ, float lightValue, float lightZ, float tempValue, float tempZ, bool tempOk);
+bool loadBaselineFromNVS(const char* key, Baseline &b, float currentVal) {
+  NVSState savedState;
+  size_t bytesRead = nvs.getBytes(key, &savedState, sizeof(NVSState));
+  
+  if (bytesRead == sizeof(NVSState) && savedState.isValid) {
+    // FIX: Enforce floor immediately to prevent div-by-zero during sanity check AND live monitoring
+    float minVar = b.minStdDev * b.minStdDev;
+    float safeVariance = (savedState.variance < minVar) ? minVar : savedState.variance;
+    float expectedStdDev = sqrt(safeVariance);
+
+    if (abs(currentVal - savedState.mean) / expectedStdDev > 5.0) {
+      Serial.printf("[%s] NVS data stale. Forcing recalibration.\n", key);
+      return false; 
+    }
+    
+    b.mean = savedState.mean;
+    b.variance = safeVariance;
+    Serial.printf("[%s] NVS loaded. Mean: %.1f\n", key, b.mean);
+    return true;
+  }
+  return false;
+}
+
+void saveBaselinesToNVS() {
+  NVSState gState = {gasBaseline.mean, gasBaseline.variance, true};
+  NVSState tState = {tempBaseline.mean, tempBaseline.variance, true};
+  NVSState lState = {lightBaseline.mean, lightBaseline.variance, true};
+  
+  nvs.putBytes("gas", &gState, sizeof(NVSState));
+  nvs.putBytes("temp", &tState, sizeof(NVSState));
+  nvs.putBytes("light", &lState, sizeof(NVSState));
+  Serial.println("[NVS] Baselines committed to flash.");
+}
 
 // ============================================================
 // Sensor reading
@@ -107,66 +141,75 @@ float readGas() { return analogRead(GAS_AO_PIN); }
 float readLight() { return analogRead(LDR_AO_PIN); }
 
 bool readTemperature(float &temperature) {
-  sensors.requestTemperatures(); // Tell DS18B20 to grab a reading
+  sensors.requestTemperatures();
   float tempC = sensors.getTempCByIndex(0);
-  
-  // DS18B20 returns DEVICE_DISCONNECTED_C (-127.0) if it fails
-  if (tempC == DEVICE_DISCONNECTED_C || isnan(tempC)) {
-    return false;
-  }
-  
+  if (tempC == DEVICE_DISCONNECTED_C || isnan(tempC)) return false;
   temperature = tempC;
   return true;
 }
+
+// ============================================================
+// Forward Declarations
+// ============================================================
+const char* alertLevelToString(AlertLevel level);
+void updateDisplayCalibrating();
+void updateDisplayLive(float gasValue, float gasZ, float lightValue, float lightZ, float tempValue, float tempZ, bool tempOk);
 
 // ============================================================
 // Setup
 // ============================================================
 void setup() {
   Serial.begin(115200);
-  delay(500);
-
-  Serial.println("============================================");
-  Serial.println(" AirGuard Cluster booting...");
-  Serial.println(" DS18B20 Temperature Upgrade Configuration");
-  Serial.println("============================================");
-
   pinMode(GAS_AO_PIN, INPUT);
   pinMode(LDR_AO_PIN, INPUT);
-  
-  // Internal pull-up to keep the OneWire bus stable in the simulator
   pinMode(ONE_WIRE_BUS, INPUT_PULLUP); 
 
-  // Initialize DS18B20 Sensor bus
   sensors.begin();
-
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
-
+  
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("OLED not detected.");
   } else {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0,0);
-    display.println("AirGuard Cluster");
-    display.println("Calibrating...");
-    display.display();
+    display.clearDisplay(); display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE); display.setCursor(0,0);
+    display.println("Atmos Initializing..."); display.display();
   }
 
-  bootTime = millis();
+  nvs.begin("atmos", false); 
+
+  float initGas = analogRead(GAS_AO_PIN);
+  float initLight = analogRead(LDR_AO_PIN);
+  sensors.requestTemperatures();
+  float initTemp = sensors.getTempCByIndex(0);
+
+  // FIX: Per-sensor warm boot evaluation
+  gasBaseline.needsCalib = !loadBaselineFromNVS("gas", gasBaseline, initGas);
+  lightBaseline.needsCalib = !loadBaselineFromNVS("light", lightBaseline, initLight);
+  tempBaseline.needsCalib = !loadBaselineFromNVS("temp", tempBaseline, initTemp);
+
+  isCalibrating = gasBaseline.needsCalib || lightBaseline.needsCalib || tempBaseline.needsCalib;
+
+  if (!isCalibrating) {
+    Serial.println("Warm boot successful for all sensors.");
+  } else {
+    Serial.println("Partial or full cold boot. Calibrating missing sensors...");
+    bootTime = millis();
+  }
   lastSampleTime = millis();
 }
 
 // ============================================================
-// Loop
+// Loop 
 // ============================================================
 void loop() {
   unsigned long now = millis();
 
-  if (now - lastSampleTime < SAMPLE_INTERVAL_MS)
-    return;
+  if (!isCalibrating && (now - lastNVSSaveTime >= NVS_SAVE_INTERVAL_MS) && currentAlert == SAFE) {
+    saveBaselinesToNVS();
+    lastNVSSaveTime = now;
+  }
 
+  if (now - lastSampleTime < SAMPLE_INTERVAL_MS) return;
   lastSampleTime = now;
 
   float gasValue = readGas();
@@ -175,25 +218,18 @@ void loop() {
   bool tempOk = readTemperature(tempValue);
 
   if (isCalibrating) {
-    calibAccumulate(gasBaseline, gasValue);
-    calibAccumulate(lightBaseline, lightValue);
-    if (tempOk) calibAccumulate(tempBaseline, tempValue);
-
-    Serial.print("[CALIBRATING] Gas=");
-    Serial.print(gasValue);
-    Serial.print(" Light=");
-    Serial.print(lightValue);
-    Serial.print(" Temp=");
-    if (tempOk) Serial.println(tempValue); else Serial.println("n/a");
+    // Only accumulate for sensors that actually need it
+    if (gasBaseline.needsCalib) calibAccumulate(gasBaseline, gasValue);
+    if (lightBaseline.needsCalib) calibAccumulate(lightBaseline, lightValue);
+    if (tempOk && tempBaseline.needsCalib) calibAccumulate(tempBaseline, tempValue);
 
     if (now - bootTime >= CALIBRATION_DURATION_MS) {
-      calibFinalize(gasBaseline);
-      calibFinalize(lightBaseline);
-      calibFinalize(tempBaseline);
+      if (gasBaseline.needsCalib) calibFinalize(gasBaseline);
+      if (lightBaseline.needsCalib) calibFinalize(lightBaseline);
+      if (tempBaseline.needsCalib) calibFinalize(tempBaseline);
       isCalibrating = false;
       Serial.println("Calibration complete.");
     }
-
     updateDisplayCalibrating();
     return;
   }
@@ -216,12 +252,6 @@ void loop() {
     if (tempOk) calibRollingUpdate(tempBaseline, tempValue);
   }
 
-  Serial.print("Gas="); Serial.print(gasValue); Serial.print(" z="); Serial.print(gasZ);
-  Serial.print(" Light="); Serial.print(lightValue); Serial.print(" z="); Serial.print(lightZ);
-  Serial.print(" Temp=");
-  if (tempOk) Serial.print(tempValue); else Serial.print("n/a");
-  Serial.print(" Status="); Serial.println(alertLevelToString(currentAlert));
-
   updateDisplayLive(gasValue, gasZ, lightValue, lightZ, tempValue, tempZ, tempOk);
 }
 
@@ -241,7 +271,7 @@ void updateDisplayCalibrating() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setCursor(0,0);
-  display.println("AirGuard Cluster");
+  display.println("Atmos");
   display.println("Calibrating...");
   display.print("Time left: ");
   long remaining = (CALIBRATION_DURATION_MS - (millis() - bootTime)) / 1000;
@@ -254,16 +284,16 @@ void updateDisplayLive(float gasValue, float gasZ, float lightValue, float light
   display.clearDisplay();
   display.setTextSize(1);
   display.setCursor(0,0);
-  display.println("AirGuard Cluster");
+  display.println("Atmos Monitor");
 
   display.setCursor(0,14);
   display.print("Gas: "); display.print(gasValue,0); display.print(" z="); display.println(gasZ,1);
 
   display.setCursor(0,24);
-  display.print("Light: "); display.print(lightValue,0); display.print(" z="); display.println(lightZ,1);
+  display.print("Lgt: "); display.print(lightValue,0); display.print(" z="); display.println(lightZ,1);
 
   display.setCursor(0,34);
-  display.print("Temp: ");
+  display.print("Tmp: ");
   if (tempOk) {
     display.print(tempValue,1); display.print("C z="); display.println(tempZ,1);
   } else {
