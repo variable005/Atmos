@@ -14,13 +14,14 @@
 6. Circuit Diagram
 7. Working Principle
 8. Statistical Anomaly Detection
-9. Display & Serial Output
-10. Software Libraries
-11. Project Structure
-12. Limitations
-13. Future Improvements
-14. Image References
-15. Author
+9. Advanced Embedded Optimizations
+10. Display & Serial Output
+11. Software Libraries
+12. Project Structure
+13. Limitations
+14. Future Improvements
+15. Image References
+16. Author
 
 ---
 
@@ -313,9 +314,39 @@ No artificial intelligence or machine learning techniques are used.
 
 ---
 
-# 9. Display & Serial Output
+# 9. Advanced Embedded Optimizations
 
-OLED displays
+The firmware is optimized for resource-constrained environments and incorporates several key design patterns:
+
+### Union Memory Layout
+To minimize the RAM footprint on the ESP32-S3, the `Baseline` struct overlays variables that are mutually exclusive in time. It uses a `union` to share memory between the calibration-phase variable `M2` (used for Welford's algorithm) and the monitoring-phase variable `variance`:
+```cpp
+struct Baseline {
+  float mean;
+  union {
+    float M2;       // Used ONLY during initial calibration
+    float variance; // Used ONLY during live monitoring
+  };
+  int sampleCount;
+  float alpha;
+  float minStdDev;
+  bool needsCalib;
+};
+```
+
+### Flash Wear Protection (NVS Guard)
+Sensor baselines are saved periodically (every 1 hour) to Non-Volatile Storage (NVS) using the `Preferences` library. To extend the flash memory lifespan and prevent corrupting the baseline with anomalous readings:
+* Writes are completely bypassed if the current system alert status is not `SAFE`.
+* Baseline updates are rate-limited to happen only when the state has stably drifted under normal conditions.
+
+### Boot Guard (Stale Baseline Sanity Check)
+On boot, the system attempts to load baseline statistics from NVS to perform a "warm boot." To prevent using an outdated baseline (e.g., if the physical environment or sensors have changed since the last power cycle), it runs a sanity check on the first readings. If the initial sensor value has a Z-score greater than `5.0` relative to the saved NVS baseline, the baseline is flagged as stale, and a cold boot calibration is automatically triggered.
+
+---
+
+# 10. Display & Serial Output
+
+OLED displays:
 
 * Gas Reading
 * Temperature
@@ -323,7 +354,7 @@ OLED displays
 * Individual Z-Scores
 * Current Alert Status
 
-Typical Serial Output
+Typical Serial Output:
 
 ```
 Gas=512 z=0.31
@@ -334,24 +365,25 @@ Status=SAFE
 
 ---
 
-# 10. Software Libraries
+# 11. Software Libraries
 
-| Library           | Purpose              |
-| ----------------- | -------------------- |
-| Wire              | I2C Communication    |
-| Adafruit GFX      | Graphics Rendering   |
-| Adafruit SSD1306  | OLED Driver          |
-| OneWire           | 1-Wire Communication |
-| DallasTemperature | DS18B20 Driver       |
+| Library           | Purpose                            |
+| ----------------- | ---------------------------------- |
+| Wire              | I2C Communication                  |
+| Adafruit GFX      | Graphics Rendering                 |
+| Adafruit SSD1306  | OLED Driver                        |
+| OneWire           | 1-Wire Communication               |
+| DallasTemperature | DS18B20 Driver                     |
+| Preferences       | ESP32 Non-Volatile Storage (NVS)   |
 
 ---
 
-# 11. Project Structure
+# 12. Project Structure
 
 ```
-Atoms/
+Atmos/
 │
-├── sketch.ino
+├── atoms.ino
 ├── diagram.json
 ├── libraries.txt
 ├── README.md
@@ -364,21 +396,18 @@ Atoms/
 
 ---
 
-# 12. Limitations
+# 13. Limitations
 
 * Calibration assumes the environment is initially normal.
-* Baseline resets after every reboot.
 * MQ-2 cannot identify individual gas types.
-* Rolling variance uses an EMA approximation rather than the complete Welford algorithm.
-* Sensor baselines are stored only in RAM.
+* Rolling variance uses an EMA approximation rather than the complete Welford algorithm during live monitoring.
 
 ---
 
-# 13. Future Improvements
+# 14. Future Improvements
 
-Possible future enhancements include
+Possible future enhancements include:
 
-* Flash memory (NVS) baseline storage
 * Per-sensor alert reporting
 * Wi-Fi dashboard integration
 * SD card logging
@@ -386,7 +415,7 @@ Possible future enhancements include
 * Mobile monitoring application
 
 ---
-# 14. Image References
+# 15. Image References
 
 | Image | Description |
 | :---: | --- |
@@ -397,7 +426,7 @@ Possible future enhancements include
 
 ---
 
-# 15. Author
+# 16. Author
 
 ## Project by
 
