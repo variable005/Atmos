@@ -2,8 +2,6 @@
 
 ## Self-Calibrating Environmental Monitoring System using ESP32-S3
 
-**Project by:** **Hariom Sharnam**
-
 ---
 
 # Table of Contents
